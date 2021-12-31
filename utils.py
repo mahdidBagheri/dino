@@ -37,35 +37,55 @@ class GaussianBlur(object):
     """
     Apply Gaussian Blur to the PIL image.
     """
-    def __init__(self, p=0.5, radius_min=0.1, radius_max=2.):
+    def __init__(self, do_it = None, p=0.5, radius_min=0.1, radius_max=2.):
         self.prob = p
         self.radius_min = radius_min
         self.radius_max = radius_max
+        self.do_it = do_it
 
-    def __call__(self, img):
-        do_it = random.random() <= self.prob
-        if not do_it:
-            return img
+    def __call__(self, imgs):
+        res_img = []
+        #self.do_it = random.random() <= self.prob
 
-        return img.filter(
-            ImageFilter.GaussianBlur(
-                radius=random.uniform(self.radius_min, self.radius_max)
-            )
-        )
+
+        if not self.do_it:
+            # print("not blured")
+            for img in imgs:
+                res_img.append(img)
+
+        if self.do_it:
+            # print("blured")
+            radius = random.uniform(self.radius_min, self.radius_max)
+            for img in imgs:
+                res_img.append(img.filter(
+                ImageFilter.GaussianBlur(
+                    radius=radius
+                )
+            ))
+
+        return res_img
 
 
 class Solarization(object):
     """
     Apply Solarization to the PIL image.
     """
-    def __init__(self, p):
-        self.p = p
+    def __init__(self, do_it = None):
+        self.do_it = do_it
 
-    def __call__(self, img):
-        if random.random() < self.p:
-            return ImageOps.solarize(img)
-        else:
-            return img
+    def __call__(self, imgs):
+        res_img = []
+        if not self.do_it:
+            # print("not solarized")
+            for img in imgs:
+                res_img.append(img)
+
+        if self.do_it:
+            # print("blured")
+            for img in imgs:
+                res_img.append(ImageOps.solarize(img))
+
+        return res_img
 
 
 def load_pretrained_weights(model, pretrained_weights, checkpoint_key, model_name, patch_size):

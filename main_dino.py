@@ -19,7 +19,7 @@ import time
 import math
 import json
 from pathlib import Path
-
+import random
 import numpy as np
 from PIL import Image
 import torch
@@ -29,10 +29,12 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torchvision import models as torchvision_models
-
+import torchvision.transforms.functional as TF
+import cv2
 import utils
 import vision_transformer as vits
 from vision_transformer import DINOHead
+import threading
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
@@ -126,10 +128,12 @@ def get_args_parser():
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+    parser.add_argument("--frame_depth", default=1, type=int, help="number of frames using in sequence.")
     return parser
 
 
 def train_dino(args):
+
     utils.init_distributed_mode(args)
     utils.fix_random_seeds(args.seed)
     print("git:\n  {}\n".format(utils.get_sha()))
@@ -137,13 +141,17 @@ def train_dino(args):
     cudnn.benchmark = True
 
     # ============ preparing data ... ============
+    threadLock = threading.Lock()
+
     transform = DataAugmentationDINO(
         args.global_crops_scale,
         args.local_crops_scale,
         args.local_crops_number,
+        threadLock
     )
     dataset = datasets.ImageFolder(args.data_path, transform=transform)
-    sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
+    #sampler = torch.utils.data.DistributedSampler(dataset, shuffle=False)
+    sampler = torch.utils.data.SequentialSampler(dataset)
     data_loader = torch.utils.data.DataLoader(
         dataset,
         sampler=sampler,
@@ -163,7 +171,7 @@ def train_dino(args):
             patch_size=args.patch_size,
             drop_path_rate=args.drop_path_rate,  # stochastic depth
         )
-        teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
+        teacher = vits.__dict__[args.arch](patch_size=args.patch_size * (args.frame_depth ** 2))
         embed_dim = student.embed_dim
     # if the network is a XCiT
     elif args.arch in torch.hub.list("facebookresearch/xcit:main"):
@@ -267,7 +275,7 @@ def train_dino(args):
     start_time = time.time()
     print("Starting DINO training !")
     for epoch in range(start_epoch, args.epochs):
-        data_loader.sampler.set_epoch(epoch)
+        #data_loader.sampler.set_epoch(epoch)
 
         # ============ training one epoch of DINO ... ============
         train_stats = train_one_epoch(student, teacher, teacher_without_ddp, dino_loss,
@@ -417,7 +425,8 @@ class DINOLoss(nn.Module):
 
 
 class DataAugmentationDINO(object):
-    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number):
+    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number,threadLock):
+        self.threadLock = threadLock
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
@@ -455,17 +464,319 @@ class DataAugmentationDINO(object):
             normalize,
         ])
 
+
     def __call__(self, image):
+        #print(image.size)
+        if(image.size != (640,1920)):
+            print("ERROR!")
+        def crop(im, height, width):
+            imgwidth, imgheight = im.size
+            k = 0
+            out = []
+            for i in range(0, imgheight, height):
+                for j in range(0, imgwidth, width):
+                    box = (j, i, j + width, i + height)
+                    out.append(im.crop(box))
+                    k += 1
+            return out
+
+        images = crop(image,480,640)
         crops = []
-        crops.append(self.global_transfo1(image))
-        crops.append(self.global_transfo2(image))
+
+        #crops.append(self.global_transfo1(image))
+
+        Gt1  = Global_transfo(self.threadLock)
+        tf1 = Gt1.transfo1(images)
+        i = 0
+        crops.append(tf1)
+
+        for obj in tf1:
+
+            #obj.save(f"image{i}.jpg")
+            i += 1
+
+
+        tf2 = Gt1.transfo2(images)
+        crops.append(tf2)
+
+        for obj in tf2:
+
+            # obj.save(f"image{i}.jpg")
+            i += 1
+
+        i = 0
+
+
+
         for _ in range(self.local_crops_number):
-            crops.append(self.local_transfo(image))
+            tf_local = Gt1.local_transfo(images)
+            crops.append(tf_local)
+        a = 0
         return crops
 
 
+
+class Global_transfo():
+    def __init__(self, threadLock):
+        self.threadLock = threadLock
+
+    def transfo2(self,images):
+        # load image with index from self.left_image_paths
+
+        # Random crop
+        i, j, h, w = transforms.RandomCrop.get_params(
+            images[0], output_size=(224, 224))
+        for x in range(len(images)):
+            images[x] = TF.crop(images[x], i, j, h, w)
+
+        # Random horizontal flipping
+        if random.random() > 0.5:
+            for i in range(len(images)):
+                images[i] = TF.hflip(images[i])
+
+        # Random vertical flipping
+        if random.random() > 0.5:
+            for i in range(len(images)):
+                images[i] = TF.vflip(images[i])
+
+        # jitter
+        color_jitter = transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)
+        fn_idx, brightness_factor, contrast_factor, saturation_factor, hue_factor = transforms.ColorJitter.get_params(color_jitter.brightness, color_jitter.contrast, color_jitter.saturation,color_jitter.hue)
+
+        for i in range(len(images)):
+            img = images[i]
+
+            for fn_id in fn_idx:
+                if fn_id == 0 and brightness_factor is not None:
+                    img = TF.adjust_brightness(img, brightness_factor)
+                elif fn_id == 1 and contrast_factor is not None:
+                    img = TF.adjust_contrast(img, contrast_factor)
+                elif fn_id == 2 and saturation_factor is not None:
+                    img = TF.adjust_saturation(img, saturation_factor)
+                elif fn_id == 3 and hue_factor is not None:
+                    img = TF.adjust_hue(img, hue_factor)
+
+            images[i] = img
+
+
+        do_it = False
+        p = random.random()
+        #print(p)
+        if(p >= 0.1):
+            do_it = True
+
+        transform_GB = transforms.Compose([utils.GaussianBlur(do_it,p=p )])
+
+
+        images = transform_GB(images)
+
+
+        #self.threadLock.acquire()
+        rnd = random.randint(1,100000)
+
+        # for i in range(len(images)):
+            # images[i].save(f"image{rnd}_{i}.jpg")
+        #self.threadLock.release()
+
+        # images solarization
+        do_it = False
+        p = random.random()
+        #print(p)
+        if(p >= 0.2):
+            do_it = True
+
+        transform_GB = transforms.Compose([utils.Solarization(do_it)])
+        images = transform_GB(images)
+
+        # to tensor
+        ToTensor = transforms.Compose([
+            transforms.ToTensor()
+        ])
+        for i in range(len(images)):
+            images[i] = ToTensor(images[i])
+
+        # normal
+        normalize = transforms.Compose([
+            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+        for i in range(len(images)):
+            images[i] = normalize(images[i])
+        
+
+
+        # concat
+        torchTensor = images[0]
+        torchTensor = torchTensor[0:,None,:]
+
+        for i in range(1,len(images)):
+            torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
+
+        return torchTensor
+
+    def transfo1(self, images):
+        # load image with index from self.left_image_paths
+
+        # Random crop
+        i, j, h, w = transforms.RandomCrop.get_params(
+            images[0], output_size=(224, 224))
+        for x in range(len(images)):
+            images[x] = TF.crop(images[x], i, j, h, w)
+
+        # Random horizontal flipping
+        if random.random() > 0.5:
+            for i in range(len(images)):
+                images[i] = TF.hflip(images[i])
+
+        # Random vertical flipping
+        if random.random() > 0.5:
+            for i in range(len(images)):
+                images[i] = TF.vflip(images[i])
+
+        # jitter
+        color_jitter = transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)
+        fn_idx, brightness_factor, contrast_factor, saturation_factor, hue_factor = transforms.ColorJitter.get_params(
+            color_jitter.brightness, color_jitter.contrast, color_jitter.saturation, color_jitter.hue)
+
+        for i in range(len(images)):
+            img = images[i]
+
+            for fn_id in fn_idx:
+                if fn_id == 0 and brightness_factor is not None:
+                    img = TF.adjust_brightness(img, brightness_factor)
+                elif fn_id == 1 and contrast_factor is not None:
+                    img = TF.adjust_contrast(img, contrast_factor)
+                elif fn_id == 2 and saturation_factor is not None:
+                    img = TF.adjust_saturation(img, saturation_factor)
+                elif fn_id == 3 and hue_factor is not None:
+                    img = TF.adjust_hue(img, hue_factor)
+
+            images[i] = img
+
+        do_it = False
+        p = random.random()
+        #print(p)
+        if (p >= 0.5):
+            do_it = True
+
+        transform_GB = transforms.Compose([utils.GaussianBlur(do_it, p=p)])
+
+        images = transform_GB(images)
+
+        # self.threadLock.acquire()
+        rnd = random.randint(1, 100000)
+        # for i in range(len(images)):
+            # images[i].save(f"image{rnd}_{i}.jpg")
+        # self.threadLock.release()
+
+        # to tensor
+        ToTensor = transforms.Compose([
+            transforms.ToTensor()
+        ])
+        for i in range(len(images)):
+            images[i] = ToTensor(images[i])
+
+        # normal
+        normalize = transforms.Compose([
+            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+        for i in range(len(images)):
+            images[i] = normalize(images[i])
+
+        # concat
+        torchTensor = images[0]
+        torchTensor = torchTensor[0:,None,:]
+
+        for i in range(1,len(images)):
+            torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
+
+        return torchTensor
+
+    def local_transfo(self, images):
+        # load image with index from self.left_image_paths
+
+        # Random crop
+        i, j, h, w = transforms.RandomCrop.get_params(
+            images[0], output_size=(96, 96))
+        for x in range(len(images)):
+            images[x] = TF.crop(images[x], i, j, h, w)
+
+        # Random horizontal flipping
+        if random.random() > 0.5:
+            for i in range(len(images)):
+                images[i] = TF.hflip(images[i])
+
+        # Random vertical flipping
+        if random.random() > 0.5:
+            for i in range(len(images)):
+                images[i] = TF.vflip(images[i])
+
+        # jitter
+        color_jitter = transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)
+        fn_idx, brightness_factor, contrast_factor, saturation_factor, hue_factor = transforms.ColorJitter.get_params(
+            color_jitter.brightness, color_jitter.contrast, color_jitter.saturation, color_jitter.hue)
+
+        for i in range(len(images)):
+            img = images[i]
+
+            for fn_id in fn_idx:
+                if fn_id == 0 and brightness_factor is not None:
+                    img = TF.adjust_brightness(img, brightness_factor)
+                elif fn_id == 1 and contrast_factor is not None:
+                    img = TF.adjust_contrast(img, contrast_factor)
+                elif fn_id == 2 and saturation_factor is not None:
+                    img = TF.adjust_saturation(img, saturation_factor)
+                elif fn_id == 3 and hue_factor is not None:
+                    img = TF.adjust_hue(img, hue_factor)
+
+            images[i] = img
+
+        do_it = False
+        p = random.random()
+        #print(p)
+        if (p >= 0.5):
+            do_it = True
+
+        transform_GB = transforms.Compose([utils.GaussianBlur(do_it, p=p)])
+
+        images = transform_GB(images)
+
+        # self.threadLock.acquire()
+        rnd = random.randint(1, 100000)
+        # for i in range(len(images)):
+            # images[i].save(f"image{rnd}_{i}.jpg")
+        # self.threadLock.release()
+
+        # to tensor
+        ToTensor = transforms.Compose([
+            transforms.ToTensor()
+        ])
+        for i in range(len(images)):
+            images[i] = ToTensor(images[i])
+
+        # normal
+        normalize = transforms.Compose([
+            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+        for i in range(len(images)):
+            images[i] = normalize(images[i])
+
+        # concat
+        torchTensor = images[0]
+        torchTensor = torchTensor[0:,None,:]
+
+        for i in range(1,len(images)):
+            torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
+
+        return torchTensor
+
+def __len__(self):
+    return len(self.image_left_paths)
+
 if __name__ == '__main__':
+    
     parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
     args = parser.parse_args()
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    os.path.abspath("PATH:" + os.sep)
+
     train_dino(args)

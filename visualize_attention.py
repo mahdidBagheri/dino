@@ -167,11 +167,33 @@ if __name__ == '__main__':
         pth_transforms.ToTensor(),
         pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
-    img = transform(img)
+
+
+    def crop(im, height, width):
+        imgwidth, imgheight = im.size
+        k = 0
+        out = []
+        for i in range(0, imgheight, height):
+            for j in range(0, imgwidth, width):
+                box = (j, i, j + width, i + height)
+                out.append(im.crop(box))
+                k += 1
+        return out
+    images = crop(img,480,640)
+    transformed_images = []
+    for img in images:
+        transformed_images.append(transform(img))
+    torchTensor = transformed_images[0]
+    torchTensor = torchTensor[0:, None, :]
+
+    for i in range(1, len(images)):
+        torchTensor = torch.cat(((transformed_images[i])[0:, None, :], torchTensor), 1)
+
+    img = torchTensor
 
     # make the image divisible by the patch size
-    w, h = img.shape[1] - img.shape[1] % args.patch_size, img.shape[2] - img.shape[2] % args.patch_size
-    img = img[:, :w, :h].unsqueeze(0)
+    w, h = img.shape[2] - img.shape[2] % args.patch_size, img.shape[3] - img.shape[3] % args.patch_size
+    img = img[:, :, :w, :h].unsqueeze(0)
 
     w_featmap = img.shape[-2] // args.patch_size
     h_featmap = img.shape[-1] // args.patch_size
