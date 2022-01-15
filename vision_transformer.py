@@ -123,11 +123,15 @@ class PatchEmbed(nn.Module):
         self.patch_size = patch_size
         self.num_patches = num_patches
 
-        self.proj = nn.Conv3d(in_chans, embed_dim, kernel_size=(frame_depth,patch_size,patch_size), stride=patch_size)
+        self.proj = nn.Conv3d(in_chans, embed_dim, kernel_size=(frame_depth,patch_size,patch_size), stride=(1,patch_size,patch_size))
 
     def forward(self, x):
         B, C, D, H, W = x.shape
-        x = self.proj(x).flatten(2).transpose(1, 2)
+        #print(x.shape)
+        x = self.proj(x)
+        #print(x.shape)
+        x = x.flatten(2).transpose(1, 2)
+        #print(x.shape)
         return x
 
 
@@ -200,10 +204,10 @@ class VisionTransformer(nn.Module):
         # add the [CLS] token to the embed patch tokens
         cls_tokens = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
-
+        #print(x.shape)
         # add positional encoding to each token
         x = x + self.interpolate_pos_encoding(x, w, h)
-
+        #print(x.shape)
         return self.pos_drop(x)
 
     def forward(self, x):

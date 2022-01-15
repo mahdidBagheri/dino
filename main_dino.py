@@ -426,6 +426,11 @@ class DINOLoss(nn.Module):
 
 class DataAugmentationDINO(object):
     def __init__(self, global_crops_scale, local_crops_scale, local_crops_number,threadLock):
+        self.global_crops_scale = global_crops_scale
+        self.local_crops_scale = local_crops_scale
+        self.local_crops_number = local_crops_number
+
+
         self.threadLock = threadLock
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
@@ -481,22 +486,23 @@ class DataAugmentationDINO(object):
             return out
 
         images = crop(image,480,640)
+
         crops = []
 
         #crops.append(self.global_transfo1(image))
 
         Gt1  = Global_transfo(self.threadLock)
-        tf1 = Gt1.transfo1(images)
+        tf1 = Gt1.transfo1(images, self.global_crops_scale)
         i = 0
         crops.append(tf1)
 
         for obj in tf1:
 
-            #obj.save(f"image{i}.jpg")
+            # obj.save(f"image{i}.jpg")
             i += 1
 
 
-        tf2 = Gt1.transfo2(images)
+        tf2 = Gt1.transfo2(images, self.global_crops_scale)
         crops.append(tf2)
 
         for obj in tf2:
@@ -504,13 +510,19 @@ class DataAugmentationDINO(object):
             # obj.save(f"image{i}.jpg")
             i += 1
 
-        i = 0
+
 
 
 
         for _ in range(self.local_crops_number):
-            tf_local = Gt1.local_transfo(images)
+            tf_local = Gt1.local_transfo(images, self.local_crops_scale)
+            """
+            for j in range(len(tf_local)):
+                tf_local[j].save(f"image{i}.jpg")
+                i += 1
+            """
             crops.append(tf_local)
+
         a = 0
         return crops
 
@@ -520,14 +532,15 @@ class Global_transfo():
     def __init__(self, threadLock):
         self.threadLock = threadLock
 
-    def transfo2(self,images):
+    def transfo2(self,images, global_crops_scale):
         # load image with index from self.left_image_paths
 
         # Random crop
-        i, j, h, w = transforms.RandomCrop.get_params(
-            images[0], output_size=(224, 224))
+        i, j, h, w = transforms.RandomResizedCrop.get_params(
+            images[0], scale=global_crops_scale,ratio=[0.999,1.001] )
         for x in range(len(images)):
-            images[x] = TF.crop(images[x], i, j, h, w)
+            img_c = TF.crop(images[x], i, j, h, w)
+            images[x] = img_c.resize((224,224))
 
         # Random horizontal flipping
         if random.random() > 0.5:
@@ -589,11 +602,15 @@ class Global_transfo():
         images = transform_GB(images)
 
         # to tensor
+
         ToTensor = transforms.Compose([
             transforms.ToTensor()
         ])
+        # TODO return torchTensor
+
         for i in range(len(images)):
             images[i] = ToTensor(images[i])
+
 
         # normal
         normalize = transforms.Compose([
@@ -611,16 +628,19 @@ class Global_transfo():
         for i in range(1,len(images)):
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
 
+
+        # TODO return torchTensor
         return torchTensor
 
-    def transfo1(self, images):
+    def transfo1(self, images, global_crops_scale):
         # load image with index from self.left_image_paths
 
         # Random crop
-        i, j, h, w = transforms.RandomCrop.get_params(
-            images[0], output_size=(224, 224))
+        i, j, h, w = transforms.RandomResizedCrop.get_params(
+            images[0], scale=global_crops_scale,ratio=[0.999,1.001] )
         for x in range(len(images)):
-            images[x] = TF.crop(images[x], i, j, h, w)
+            img_c = TF.crop(images[x], i, j, h, w)
+            images[x] = img_c.resize((224,224))
 
         # Random horizontal flipping
         if random.random() > 0.5:
@@ -672,9 +692,11 @@ class Global_transfo():
         ToTensor = transforms.Compose([
             transforms.ToTensor()
         ])
+        # TODO return torchTensor
+
         for i in range(len(images)):
             images[i] = ToTensor(images[i])
-
+            pass
         # normal
         normalize = transforms.Compose([
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -688,17 +710,20 @@ class Global_transfo():
 
         for i in range(1,len(images)):
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
+        
 
+        # TODO return torchTensor
         return torchTensor
 
-    def local_transfo(self, images):
+    def local_transfo(self, images, local_crops_scale):
         # load image with index from self.left_image_paths
 
         # Random crop
-        i, j, h, w = transforms.RandomCrop.get_params(
-            images[0], output_size=(96, 96))
+        i, j, h, w = transforms.RandomResizedCrop.get_params(
+            images[0], scale=local_crops_scale,ratio=[0.999,1.001] )
         for x in range(len(images)):
-            images[x] = TF.crop(images[x], i, j, h, w)
+            img_c = TF.crop(images[x], i, j, h, w)
+            images[x] = img_c.resize((96,96))
 
         # Random horizontal flipping
         if random.random() > 0.5:
@@ -750,8 +775,11 @@ class Global_transfo():
         ToTensor = transforms.Compose([
             transforms.ToTensor()
         ])
+        # TODO return torchTensor
+
         for i in range(len(images)):
             images[i] = ToTensor(images[i])
+            pass
 
         # normal
         normalize = transforms.Compose([
@@ -767,6 +795,7 @@ class Global_transfo():
         for i in range(1,len(images)):
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
 
+        # TODO return torchTensor
         return torchTensor
 
 def __len__(self):
