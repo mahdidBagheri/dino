@@ -498,7 +498,7 @@ class DataAugmentationDINO(object):
 
         for obj in tf1:
 
-            # obj.save(f"image{i}.jpg")
+            #obj.save(f"image{i}.jpg")
             i += 1
 
 
@@ -507,7 +507,7 @@ class DataAugmentationDINO(object):
 
         for obj in tf2:
 
-            # obj.save(f"image{i}.jpg")
+            #obj.save(f"image{i}.jpg")
             i += 1
 
 
@@ -532,8 +532,9 @@ class Global_transfo():
     def __init__(self, threadLock):
         self.threadLock = threadLock
 
-    def transfo2(self,images, global_crops_scale):
+    def transfo2(self,inp_images, global_crops_scale):
         # load image with index from self.left_image_paths
+        images = inp_images.copy()
 
         # Random crop
         i, j, h, w = transforms.RandomResizedCrop.get_params(
@@ -629,12 +630,13 @@ class Global_transfo():
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
 
 
-        # TODO return torchTensor
+        # TODO return torchTensor instaed of images
         return torchTensor
 
-    def transfo1(self, images, global_crops_scale):
+    def transfo1(self, inp_images, global_crops_scale):
+        images = inp_images.copy()
         # load image with index from self.left_image_paths
-
+        image_diff = []
         # Random crop
         i, j, h, w = transforms.RandomResizedCrop.get_params(
             images[0], scale=global_crops_scale,ratio=[0.999,1.001] )
@@ -712,11 +714,12 @@ class Global_transfo():
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
         
 
-        # TODO return torchTensor
+        # TODO return torchTensor instead of images
         return torchTensor
 
-    def local_transfo(self, images, local_crops_scale):
+    def local_transfo(self, inp_images, local_crops_scale):
         # load image with index from self.left_image_paths
+        images = inp_images.copy()
 
         # Random crop
         i, j, h, w = transforms.RandomResizedCrop.get_params(
@@ -795,7 +798,8 @@ class Global_transfo():
         for i in range(1,len(images)):
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
 
-        # TODO return torchTensor
+
+        # TODO return torchTensor instead of images
         return torchTensor
 
 def __len__(self):
