@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 import random
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageChops
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -535,13 +535,16 @@ class Global_transfo():
     def transfo2(self,inp_images, global_crops_scale):
         # load image with index from self.left_image_paths
         images = inp_images.copy()
-
+        image_diff = []
         # Random crop
         i, j, h, w = transforms.RandomResizedCrop.get_params(
             images[0], scale=global_crops_scale,ratio=[0.999,1.001] )
         for x in range(len(images)):
             img_c = TF.crop(images[x], i, j, h, w)
             images[x] = img_c.resize((224,224))
+
+        for i in range(len(images)-1):
+            image_diff.append(ImageChops.subtract(images[i], images[i+1], scale=1.0, offset=2))
 
         # Random horizontal flipping
         if random.random() > 0.5:
@@ -620,6 +623,17 @@ class Global_transfo():
         for i in range(len(images)):
             images[i] = normalize(images[i])
         
+        #diffs to tensor
+        for i in range(len(image_diff)):
+            image_diff[i] = ToTensor(image_diff[i])
+
+        normalize_diff = transforms.Compose([
+            transforms.Normalize((0, 0, 0), (0.229, 0.224, 0.225)),
+        ])
+
+        #normalize diffs
+        for i in range(len(image_diff)):
+            image_diff[i] = normalize_diff(image_diff[i])
 
 
         # concat
@@ -628,7 +642,7 @@ class Global_transfo():
 
         for i in range(1,len(images)):
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
-
+            torchTensor = torch.cat(((image_diff[i - 1])[0:, None, :], torchTensor), 1)
 
         # TODO return torchTensor instaed of images
         return torchTensor
@@ -644,7 +658,10 @@ class Global_transfo():
             img_c = TF.crop(images[x], i, j, h, w)
             images[x] = img_c.resize((224,224))
 
-        # Random horizontal flipping
+        for i in range(len(images)-1):
+            image_diff.append(ImageChops.subtract(images[i], images[i+1], scale=1.0, offset=2))
+
+            # Random horizontal flipping
         if random.random() > 0.5:
             for i in range(len(images)):
                 images[i] = TF.hflip(images[i])
@@ -690,6 +707,8 @@ class Global_transfo():
             # images[i].save(f"image{rnd}_{i}.jpg")
         # self.threadLock.release()
 
+
+
         # to tensor
         ToTensor = transforms.Compose([
             transforms.ToTensor()
@@ -706,13 +725,25 @@ class Global_transfo():
         for i in range(len(images)):
             images[i] = normalize(images[i])
 
+        #diffs to tensor
+        for i in range(len(image_diff)):
+            image_diff[i] = ToTensor(image_diff[i])
+
+        normalize_diff = transforms.Compose([
+            transforms.Normalize((0, 0, 0), (0.229, 0.224, 0.225)),
+        ])
+
+        #normalize diffs
+        for i in range(len(image_diff)):
+            image_diff[i] = normalize_diff(image_diff[i])
+
         # concat
         torchTensor = images[0]
         torchTensor = torchTensor[0:,None,:]
 
         for i in range(1,len(images)):
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
-        
+            torchTensor = torch.cat(((image_diff[i-1])[0:,None,:],torchTensor),1)
 
         # TODO return torchTensor instead of images
         return torchTensor
@@ -720,13 +751,16 @@ class Global_transfo():
     def local_transfo(self, inp_images, local_crops_scale):
         # load image with index from self.left_image_paths
         images = inp_images.copy()
-
+        image_diff = []
         # Random crop
         i, j, h, w = transforms.RandomResizedCrop.get_params(
             images[0], scale=local_crops_scale,ratio=[0.999,1.001] )
         for x in range(len(images)):
             img_c = TF.crop(images[x], i, j, h, w)
             images[x] = img_c.resize((96,96))
+
+        for i in range(len(images)-1):
+            image_diff.append(ImageChops.subtract(images[i], images[i+1], scale=1.0, offset=2))
 
         # Random horizontal flipping
         if random.random() > 0.5:
@@ -791,13 +825,25 @@ class Global_transfo():
         for i in range(len(images)):
             images[i] = normalize(images[i])
 
+        # diffs to tensor
+        for i in range(len(image_diff)):
+            image_diff[i] = ToTensor(image_diff[i])
+
+        normalize_diff = transforms.Compose([
+            transforms.Normalize((0, 0, 0), (0.229, 0.224, 0.225)),
+        ])
+
+            # normalize diffs
+        for i in range(len(image_diff)):
+            image_diff[i] = normalize_diff(image_diff[i])
+
         # concat
         torchTensor = images[0]
         torchTensor = torchTensor[0:,None,:]
 
         for i in range(1,len(images)):
             torchTensor = torch.cat(((images[i])[0:,None,:],torchTensor),1)
-
+            torchTensor = torch.cat(((image_diff[i - 1])[0:, None, :], torchTensor), 1)
 
         # TODO return torchTensor instead of images
         return torchTensor

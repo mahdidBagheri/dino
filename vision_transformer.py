@@ -123,7 +123,7 @@ class PatchEmbed(nn.Module):
         self.patch_size = patch_size
         self.num_patches = num_patches
 
-        self.proj = nn.Conv3d(in_chans, embed_dim, kernel_size=(frame_depth,patch_size,patch_size), stride=(1,patch_size,patch_size))
+        self.proj = nn.Conv3d(in_chans, embed_dim, kernel_size=(7,patch_size,patch_size), stride=(1,patch_size,patch_size))
 
     def forward(self, x):
         B, C, D, H, W = x.shape

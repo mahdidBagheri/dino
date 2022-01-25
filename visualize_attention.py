@@ -29,11 +29,51 @@ import torch.nn as nn
 import torchvision
 from torchvision import transforms as pth_transforms
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageChops
+
 
 import utils
 import vision_transformer as vits
 
+def transform_visualize(images):
+    def crop(im, height, width):
+        imgwidth, imgheight = im.size
+        k = 0
+        out = []
+        for i in range(0, imgheight, height):
+            for j in range(0, imgwidth, width):
+                box = (j, i, j + width, i + height)
+                out.append(im.crop(box))
+                k += 1
+        return out
+
+    images = crop(images, 480, 640)
+
+
+    image_diff = []
+    for i in range(len(images) - 1):
+        image_diff.append(ImageChops.subtract(images[i], images[i + 1], scale=1.0, offset=2))
+
+    ToTensor = pth_transforms.Compose([
+        pth_transforms.ToTensor()
+    ])
+
+    transformed_images = []
+    for img in images:
+        transformed_images.append(ToTensor(img))
+
+    transformed_crops = []
+    for img_diff in image_diff:
+        transformed_crops.append(ToTensor(img_diff))
+
+    torchTensor = transformed_images[0]
+    torchTensor = torchTensor[0:, None, :]
+
+    for i in range(1, len(images)):
+        torchTensor = torch.cat(((transformed_images[i])[0:, None, :], torchTensor), 1)
+        torchTensor = torch.cat(((transformed_crops[i - 1])[0:, None, :], torchTensor), 1)
+
+    return torchTensor
 
 def apply_mask(image, mask, color, alpha=0.5):
     for c in range(3):
@@ -94,6 +134,51 @@ def display_instances(image, mask, fname="test", figsize=(5, 5), blur=False, con
     print(f"{fname} saved.")
     return
 
+
+def visualize_filters(model):
+    model_weights = []  # we will save the conv layer weights in this list
+    conv_layers = []  # we will save the 49 conv layers in this list
+    # get all the model children as list
+    model_children = list(model.children())
+
+    # append all the conv layers and their respective weights to the list
+    model_weights.append(list(model.children())[0].proj.weight)
+    conv_layers.append(model_children[0].proj)
+
+    # take a look at the conv layers and the respective weights
+    for weight, conv in zip(model_weights, conv_layers):
+        # print(f"WEIGHT: {weight} \nSHAPE: {weight.shape}")
+        print(f"CONV: {conv} ====> SHAPE: {weight.shape}")
+
+    # visualize the first conv layer filters
+
+    model_weights[0] = (model_weights[0]).cpu()
+    counter = 0
+    for i, filter3D in enumerate(model_weights[0]):
+
+        fig, axs = plt.subplots(7,3, figsize=(11,21))
+
+        cmaps = ['viridis']
+        #fig.axis('off')
+        #axs.colorbar()
+        pcm = axs[0, 0].pcolormesh(filter3D[0, 0, :, :].detach() * (1), cmap=cmaps[0])
+        fig.colorbar(pcm, ax=axs)
+        channels = ["r", "g", "b"]
+        print(f"{i} filters saved")
+
+        for k in range(3):
+            for j in range (filter3D.size(dim = 1)):
+
+                axs[j , k].contourf(filter3D[k, j, :, :].detach())
+                axs[j , k].set_title(f"{channels[k]}, d{j}")
+                axs[j , k].set_yticklabels([])
+                axs[j , k].set_xticklabels([])
+        fig.savefig(f"filters/filter{i}.png")
+
+        plt.close(fig)
+
+        if (i > 100):
+            break
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Visualize Self-Attention maps')
@@ -168,28 +253,7 @@ if __name__ == '__main__':
         pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
 
-
-    def crop(im, height, width):
-        imgwidth, imgheight = im.size
-        k = 0
-        out = []
-        for i in range(0, imgheight, height):
-            for j in range(0, imgwidth, width):
-                box = (j, i, j + width, i + height)
-                out.append(im.crop(box))
-                k += 1
-        return out
-    images = crop(img,480,640)
-    transformed_images = []
-    for img in images:
-        transformed_images.append(transform(img))
-    torchTensor = transformed_images[0]
-    torchTensor = torchTensor[0:, None, :]
-
-    for i in range(1, len(images)):
-        torchTensor = torch.cat(((transformed_images[i])[0:, None, :], torchTensor), 1)
-
-    img = torchTensor
+    img = transform_visualize(img)
 
     # make the image divisible by the patch size
     w, h = img.shape[2] - img.shape[2] % args.patch_size, img.shape[3] - img.shape[3] % args.patch_size
@@ -199,6 +263,8 @@ if __name__ == '__main__':
     h_featmap = img.shape[-1] // args.patch_size
 
     attentions = model.get_last_selfattention(img.to(device))
+
+    #visualize_filters(model)
 
     nh = attentions.shape[1] # number of head
 
@@ -223,7 +289,7 @@ if __name__ == '__main__':
 
     # save attentions heatmaps
     os.makedirs(args.output_dir, exist_ok=True)
-    torchvision.utils.save_image(torchvision.utils.make_grid(img, normalize=True, scale_each=True), os.path.join(args.output_dir, "img.png"))
+    #torchvision.utils.save_image(torchvision.utils.make_grid(img, normalize=True, scale_each=True), os.path.join(args.output_dir, "img.png"))
     for j in range(nh):
         fname = os.path.join(args.output_dir, "attn-head" + str(j) + ".png")
         plt.imsave(fname=fname, arr=attentions[j], format='png')
@@ -233,3 +299,4 @@ if __name__ == '__main__':
         image = skimage.io.imread(os.path.join(args.output_dir, "img.png"))
         for j in range(nh):
             display_instances(image, th_attn[j], fname=os.path.join(args.output_dir, "mask_th" + str(args.threshold) + "_head" + str(j) +".png"), blur=False)
+
